@@ -10,7 +10,7 @@ import math
 from tensorboardX import SummaryWriter
 from dataset.inat import INaturalist
 from dataset.imagenet import ImageNetLT
-from models import resnet_big, resnext
+from models import resnext
 import warnings
 import torch.backends.cudnn as cudnn
 import random
@@ -63,7 +63,7 @@ parser.add_argument('--warmup_epochs', default=0, type=int,
 parser.add_argument('--root_log', type=str, default='log')
 parser.add_argument('--cos', default=True, type=bool,
                     help='lr decays by cosine scheduler. ')
-parser.add_argument('--use_norm', default=True, type=bool,
+parser.add_argument('--use_norm', default=False, type=bool,
                     help='cosine classifier.')
 parser.add_argument('--randaug_m', default=10, type=int, help='randaug-m')
 parser.add_argument('--randaug_n', default=2, type=int, help='randaug-n')
@@ -101,6 +101,7 @@ def main_worker(gpu, ngpus_per_node, args):
 
     # create model
     print("=> creating model '{}'".format(args.arch))
+    num_classes=1000
     if args.arch == 'resnet50':
         model = resnext.BCLModel(name='resnet50', num_classes=num_classes, feat_dim=args.feat_dim,
                                  use_norm=args.use_norm)
@@ -264,28 +265,28 @@ def main_worker(gpu, ngpus_per_node, args):
         # train for one epoch
         train(train_loader, model, criterion_ce, criterion_scl, optimizer, epoch, args, tf_writer)
 
-        # evaluate on validation set
-        acc1, many, med, few = validate(train_loader, val_loader, model, criterion_ce, epoch, args,
-                                        tf_writer)
+        # evaluate on validation set # NOTE : Commented by Adv8
+        # acc1, many, med, few = validate(train_loader, val_loader, model, criterion_ce, epoch, args,
+        #                                 tf_writer)
 
-        # remember best acc@1 and save checkpoint
-        is_best = acc1 > best_acc1
-        best_acc1 = max(acc1, best_acc1)
-        if is_best:
-            best_many = many
-            best_med = med
-            best_few = few
-        print('Best Prec@1: {:.3f}, Many Prec@1: {:.3f}, Med Prec@1: {:.3f}, Few Prec@1: {:.3f}'.format(best_acc1,
-                                                                                                        best_many,
-                                                                                                        best_med,
-                                                                                                        best_few))
-        save_checkpoint(args, {
-            'epoch': epoch + 1,
-            'arch': args.arch,
-            'state_dict': model.state_dict(),
-            'best_acc1': best_acc1,
-            'optimizer': optimizer.state_dict(),
-        }, is_best)
+        # # remember best acc@1 and save checkpoint
+        # is_best = acc1 > best_acc1
+        # best_acc1 = max(acc1, best_acc1)
+        # if is_best:
+        #     best_many = many
+        #     best_med = med
+        #     best_few = few
+        # print('Best Prec@1: {:.3f}, Many Prec@1: {:.3f}, Med Prec@1: {:.3f}, Few Prec@1: {:.3f}'.format(best_acc1,
+        #                                                                                                 best_many,
+        #                                                                                                 best_med,
+        #                                                                                                 best_few))
+        # save_checkpoint(args, {
+        #     'epoch': epoch + 1,
+        #     'arch': args.arch,
+        #     'state_dict': model.state_dict(),
+        #     'best_acc1': best_acc1,
+        #     'optimizer': optimizer.state_dict(),
+        # }, is_best)
 
 
 def train(train_loader, model, criterion_ce, criterion_scl, optimizer, epoch, args, tf_writer):
@@ -296,44 +297,50 @@ def train(train_loader, model, criterion_ce, criterion_scl, optimizer, epoch, ar
 
     model.train()
     end = time.time()
-    for i, data in enumerate(train_loader):
-        inputs, targets = data
-        inputs = torch.cat([inputs[0], inputs[1], inputs[2]], dim=0)
-        inputs, targets = inputs.cuda(), targets.cuda()
-        batch_size = targets.shape[0]
-        feat_mlp, logits, centers = model(inputs)
-        centers = centers[:args.cls_num]
-        _, f2, f3 = torch.split(feat_mlp, [batch_size, batch_size, batch_size], dim=0)
-        features = torch.cat([f2.unsqueeze(1), f3.unsqueeze(1)], dim=1)
-        logits, _, __ = torch.split(logits, [batch_size, batch_size, batch_size], dim=0)
-        scl_loss = criterion_scl(centers, features, targets)
-        ce_loss = criterion_ce(logits, targets)
-        loss = args.alpha * ce_loss + args.beta * scl_loss
 
-        ce_loss_all.update(ce_loss.item(), batch_size)
-        scl_loss_all.update(scl_loss.item(), batch_size)
-        acc1 = accuracy(logits, targets, topk=(1,))
-        top1.update(acc1[0].item(), batch_size)
+    # for i, data in enumerate(train_loader):
+    # inputs, targets = data
+    targets=torch.tensor([7,7,7,7]) # NOTE : Added by Adv8
+    inputs = torch.randn(12,3,224,224) # JUST MAKING IT WORK! 
+    # inputs = torch.cat([inputs[0], inputs[1], inputs[2]], dim=0) # Combining inputs from 3 augmentations
 
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+    # NOTE - Augmentations are randaug, randaug+grayscale, all except randaug
+    # NOTE: PCDET : weak aug, strong aug, (only GT sampling, no augmentation)?
+    inputs, targets = inputs.cuda(), targets.cuda()
+    batch_size = targets.shape[0]
+    feat_mlp, logits, centers = model(inputs) # feat_mlp -> 12,1024 ; logits -> 12,1000 ; centers -> 2048,1000
+    centers = centers[:args.cls_num]
+    _, f2, f3 = torch.split(feat_mlp, [batch_size, batch_size, batch_size], dim=0) # f2/f3 -> 4,1024
+    features = torch.cat([f2.unsqueeze(1), f3.unsqueeze(1)], dim=1) # 4,2,1024
+    logits, _, __ = torch.split(logits, [batch_size, batch_size, batch_size], dim=0) # 4,1000
+    scl_loss = criterion_scl(centers, features, targets)
+    ce_loss = criterion_ce(logits, targets)
+    loss = args.alpha * ce_loss + args.beta * scl_loss
 
-        batch_time.update(time.time() - end)
-        end = time.time()
+    # ce_loss_all.update(ce_loss.item(), batch_size)
+    # scl_loss_all.update(scl_loss.item(), batch_size)
+    # acc1 = accuracy(logits, targets, topk=(1,))
+    # top1.update(acc1[0].item(), batch_size)
 
-        if i % args.print_freq == 0:
-            output = ('Epoch: [{0}][{1}/{2}] \t'
-                      'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                      'CE_Loss {ce_loss.val:.4f} ({ce_loss.avg:.4f})\t'
-                      'SCL_Loss {scl_loss.val:.4f} ({scl_loss.avg:.4f})\t'
-                      'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
-                epoch, i, len(train_loader), batch_time=batch_time,
-                ce_loss=ce_loss_all, scl_loss=scl_loss_all, top1=top1, ))  # TODO
-            print(output)
-     tf_writer.add_scalar('CE loss/train', ce_loss_all.avg, epoch)
-     tf_writer.add_scalar('SCL loss/train', scl_loss_all.avg, epoch)
-     tf_writer.add_scalar('acc/train_top1', top1.avg, epoch)
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+
+    batch_time.update(time.time() - end)
+    end = time.time()
+
+    # if i % args.print_freq == 0: # NOTE : Commented by Adv8
+    #     output = ('Epoch: [{0}][{1}/{2}] \t'
+    #                 'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+    #                 'CE_Loss {ce_loss.val:.4f} ({ce_loss.avg:.4f})\t'
+    #                 'SCL_Loss {scl_loss.val:.4f} ({scl_loss.avg:.4f})\t'
+    #                 'Prec@1 {top1.val:.3f} ({top1.avg:.3f})'.format(
+    #         epoch, i, len(train_loader), batch_time=batch_time,
+    #         ce_loss=ce_loss_all, scl_loss=scl_loss_all, top1=top1, ))  
+    #     print(output)
+    #  tf_writer.add_scalar('CE loss/train', ce_loss_all.avg, epoch) # # NOTE : Commented by Adv8
+    #  tf_writer.add_scalar('SCL loss/train', scl_loss_all.avg, epoch) # NOTE : Commented by Adv8
+    #  tf_writer.add_scalar('acc/train_top1', top1.avg, epoch) # NOTE : Commented by Adv8
 
 
 def validate(train_loader, val_loader, model, criterion_ce, epoch, args, tf_writer=None, flag='val'):

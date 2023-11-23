@@ -7,7 +7,7 @@ from __future__ import print_function
 import torch
 import torch.nn as nn
 
-
+#  Lines 49-51 : BCL's main contribution to SCL (Class averaging)
 class BalSCL(nn.Module):
     def __init__(self, cls_num_list=None, temperature=0.1):
         super(BalSCL, self).__init__()
@@ -19,12 +19,12 @@ class BalSCL(nn.Module):
         device = (torch.device('cuda')
                   if features.is_cuda
                   else torch.device('cpu'))
-        batch_size = features.shape[0]
-        targets = targets.contiguous().view(-1, 1)
+        batch_size = features.shape[0] #4
+        targets = targets.contiguous().view(-1, 1) # tensor(4,1)
         targets_centers = torch.arange(len(self.cls_num_list), device=device).view(-1, 1)
-        targets = torch.cat([targets.repeat(2, 1), targets_centers], dim=0)
-        batch_cls_count = torch.eye(len(self.cls_num_list))[targets].sum(dim=0).squeeze()
-
+        targets = torch.cat([targets.repeat(2, 1), targets_centers], dim=0) # 1008,1
+        batch_cls_count = torch.eye(len(self.cls_num_list))[targets].sum(dim=0).squeeze() # What is batch_cls_count??
+        
         mask = torch.eq(targets[:2 * batch_size], targets.T).float().to(device)
         logits_mask = torch.scatter(
             torch.ones_like(mask),
@@ -47,12 +47,12 @@ class BalSCL(nn.Module):
         # class-averaging
         exp_logits = torch.exp(logits) * logits_mask
         per_ins_weight = torch.tensor([batch_cls_count[i] for i in targets], device=device).view(1, -1).expand(
-            2 * batch_size, 2 * batch_size + len(self.cls_num_list)) - mask
+            2 * batch_size, 2 * batch_size + len(self.cls_num_list)) - mask #8,1008
         exp_logits_sum = exp_logits.div(per_ins_weight).sum(dim=1, keepdim=True)
         
-        log_prob = logits - torch.log(exp_logits_sum)
+        log_prob = logits - torch.log(exp_logits_sum) #back to SCL
         mean_log_prob_pos = (mask * log_prob).sum(1) / mask.sum(1)
 
         loss = - mean_log_prob_pos
-        loss = loss.view(2, batch_size).mean()
+        loss = loss.view(2, batch_size).mean() # 2, batch_size?
         return loss

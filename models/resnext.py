@@ -9,11 +9,12 @@ class NormedLinear(nn.Module):
 
     def __init__(self, in_features, out_features):
         super(NormedLinear, self).__init__()
-        self.weight = nn.Parameter(torch.Tensor(in_features, out_features))
-        self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5)
+        self.weight = nn.Parameter(torch.Tensor(in_features, out_features)) #2048,1000 -> 1 Weight per class, 1000 classes here
+        self.weight.data.uniform_(-1, 1).renorm_(2, 1, 1e-5).mul_(1e5) # initialize weight
         self.s = 30
 
-    def forward(self, x):
+
+    def forward(self, x): #calculates cosine similarity between weights and elements... Weights are the prototypes!
         out = F.normalize(x, dim=1).mm(F.normalize(self.weight, dim=0))
         return self.s * out
 
@@ -297,13 +298,15 @@ class BCLModel(nn.Module):
         if use_norm:
             self.fc = NormedLinear(dim_in, num_classes)
         else:
-            self.fc = nn.Linear(dim_in, num_classes)
-        self.head_fc = nn.Sequential(nn.Linear(dim_in, dim_in), nn.BatchNorm1d(dim_in), nn.ReLU(inplace=True),
-                                   nn.Linear(dim_in, feat_dim))
+            self.fc = nn.Linear(dim_in, num_classes) #
+        self.head_fc = nn.Sequential(nn.Linear(num_classes, dim_in), nn.BatchNorm1d(dim_in), nn.ReLU(inplace=True),
+                                   nn.Linear(dim_in, feat_dim)) # NOTE: Adv8 - changed nn.Linear dimensions to be num_classes, dim_in
 
     def forward(self, x):
-        feat = self.encoder(x)
-        feat_mlp = F.normalize(self.head(feat), dim=1)
-        logits = self.fc(feat)
-        centers_logits = F.normalize(self.head_fc(self.fc.weight.T), dim=1)
+        feat = self.encoder(x) # x.shape -> 4,3,224,224 , feat.shape -> 4,2048
+        feat_mlp = F.normalize(self.head(feat), dim=1) #feat_mlp -> 4,1024
+        logits = self.fc(feat) # logits.shape ->4,1000 
+        #-> for each input in batch, similarity scores of sample against every class prototype
+        #NormedLinear layer uses new Variable to capture per-class prototype with use-norm true flag. When false, uses linear layer's weights.
+        centers_logits = F.normalize(self.head_fc(self.fc.weight.T), dim=1) # tensor dim mismatch between 2048*2048 and 2048*1000
         return feat_mlp, logits, centers_logits
